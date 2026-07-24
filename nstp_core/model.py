@@ -175,8 +175,10 @@ class NSTPModel(nn.Module):
         else:
             self.embedding = nn.Embedding(config.vocab_size, config.d_model)
         
-        # Position embedding (learned for short sequences, HSA handles long)
-        self.pos_embedding = nn.Embedding(config.max_seq_len, config.d_model)
+        # Position handling: HSA's cyclic-shift binding encodes positions,
+        # so we do NOT add a learned positional embedding here.
+        # (A learned pos_embedding for max_seq_len=1M would be ~128M dead params.)
+        _ = None  # placeholder
         
         # Transformer blocks
         self.blocks = nn.ModuleList([
@@ -249,12 +251,8 @@ class NSTPModel(nn.Module):
         
         # Embeddings
         x = self.embedding(input_ids)  # [batch, seq_len, d_model]
-        
-        # Add positional embeddings for short-range
-        if seq_len <= self.config.max_seq_len:
-            pos_emb = self.pos_embedding(positions)
-            x = x + pos_emb
-        
+
+        # No learned positional embedding — HSA cyclic-shift binds positions.
         x = self.dropout(x)
         
         # Track auxiliary losses

@@ -14,7 +14,7 @@ Combined: **100-1000× less compute** than dense transformers, with a clear path
 
 ## 📌 What's In This Repo
 
-**Phase 1: Digital Implementation** — Working PyTorch prototype that proves the math and architecture.
+**Phase 2: Vectorized + Optimized** — Working PyTorch prototype with vectorized HSA retrieval.
 
 ### Core Components
 
@@ -73,12 +73,18 @@ Expected output:
 
   ALL TESTS PASSED! ✓
 ============================================================
-```
+---
 
 ### Run Smoke Training (50 steps)
 ```bash
 python training/smoke_train.py
 ```
+
+### Run Vectorized vs Standard Benchmark
+```bash
+python benchmarks/verify_fix.py
+```
+Shows parameter breakdown and CPU forward-time comparison vs Standard Transformer.
 
 ---
 
@@ -124,10 +130,11 @@ Input (B, N, d_model)
 | Phase | Status | Description |
 |-------|--------|-------------|
 | **Phase 1** | ✅ Done | Digital PyTorch prototype — math & architecture validated |
-| **Phase 2** | 📋 Planned | Efficient TT ops (replace dense reconstruction with sparse core contractions) |
-| **Phase 3** | 📋 Planned | Analog crossbar simulator for in-memory computing |
-| **Phase 4** | 📋 Planned | Train foundation model from scratch |
-| **Phase 5** | 📋 Planned | Demonstrate interface with existing LLMs (GLM, Llama, etc.) |
+| **Phase 2** | ✅ Done | Vectorized HSA (torch.gather) + dead-weight removal — params 488× → 3.4× bigger than Standard |
+| **Phase 3** | 📋 Planned | Efficient TT ops (replace dense reconstruction with sparse core contractions) |
+| **Phase 4** | 📋 Planned | Analog crossbar simulator for in-memory computing |
+| **Phase 5** | 📋 Planned | Train foundation model from scratch on real data (WikiText-2) |
+| **Phase 6** | 📋 Planned | Demonstrate interface with existing LLMs (GLM, Llama, etc.) |
 
 ---
 

@@ -367,7 +367,48 @@ class HyperdimensionalAttention(nn.Module):
         # Output projection
         self.output_proj = nn.Linear(hsa_dim, d_model)
         self.dropout = nn.Dropout(dropout)
-    
+
+    def _retrieve_xor_vectorized(
+        self,
+        M: torch.Tensor,            # [batch, head_dim]
+        positions: torch.Tensor,    # [batch, seq_len] or [seq_len] (single sequence)
+        batch: int,
+        seq_len: int,
+        head_dim: int,
+    ) -> torch.Tensor:
+        """
+        Vectorized cyclic_shift retrieval: for each (b, i), return cyclic_shift(M[b], -positions[b, i]).
+
+        Approach:
+        - Expand M to [batch, seq_len, head_dim] where each slot copies M[b].
+        - Use torch.roll along last dim with a per-(b, i) shift? torch.roll only supports
+          a scalar-or-1D shift, not per-row of a 2D slice.
+
+        Practical fully-vectorized solution: precompute indices on an extended dimension.
+        Specifically, build an expanded grid [batch*seq_len, head_dim] using index gather.
+        """
+        device = M.device
+        dtype = M.dtype
+
+        # If positions is [seq_len] only, expand to [batch, seq_len]
+        if positions.dim() == 1:
+            positions = positions.unsqueeze(0).expand(batch, -1)
+
+        # M has shape [batch, head_dim].
+        # We want output [batch, seq_len, head_dim] where
+        # out[b, i, :] = roll(M[b], shifts=-positions[b, i])
+
+        # Construct the gather index for every (b, i, k):
+        # out[b, i, k] = M[b, (k - positions[b, i]) mod head_dim]
+        k = torch.arange(head_dim, device=device).view(1, 1, head_dim)  # [1, 1, D]
+        shifts = positions.view(batch, seq_len, 1)                        # [B, N, 1]
+        idx = (k - shifts) % head_dim                                     # [B, N, D]
+
+        # Expand M to [B, 1, D] so we can gather
+        M_expanded = M.unsqueeze(1).expand(batch, seq_len, head_dim)      # [B, N, D]
+        retrieved = torch.gather(M_expanded, 2, idx)                      # [B, N, D]
+        return retrieved
+
     def forward(
         self,
         x: torch.Tensor,
@@ -402,18 +443,20 @@ class HyperdimensionalAttention(nn.Module):
             contexts.append(M)
             
             # Retrieve per position: qᵢ = unbind(M, posᵢ)
-            # For XOR mode: qᵢ = M * cyclic_shift(δ, posᵢ) = cyclic_shift(M, -posᵢ)
-            retrieved = torch.zeros_like(h)
-            for i in range(seq_len):
-                pos_i = positions[:, i]  # [batch]
-                if self.bind_mode == "xor":
-                    for b in range(batch):
-                        retrieved[b, i] = cyclic_shift(M[b], -pos_i[b].item())
-                else:
-                    for b in range(batch):
+            # For XOR mode: qᵢ = cyclic_shift(M, -posᵢ)
+            # Vectorized: torch.roll applied per-(batch, position) is still
+            # sequential in Python. We instead RETRIEVE FOR ALL POSITIONS by
+            # rolling the accumulator once per shift (still O(n) but no inner loop).
+            # Best fully-vectorized approach: compute shift indices per (b, i) and use gather.
+            if self.bind_mode == "xor":
+                retrieved = self._retrieve_xor_vectorized(M, positions, batch, seq_len, self.hsa_dim // self.num_heads)
+            else:
+                retrieved = torch.zeros_like(h)
+                for b in range(batch):
+                    for i in range(seq_len):
                         pos_enc = torch.zeros_like(M[b:b+1])
                         pos_enc[:, 0] = 1.0
-                        pos_enc = cyclic_shift(pos_enc, pos_i[b].item())
+                        pos_enc = cyclic_shift(pos_enc, positions[b, i].item())
                         retrieved[b, i] = unbind(M[b], pos_enc[0], mode=self.bind_mode)
             
             # Denoise
