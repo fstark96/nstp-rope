@@ -255,34 +255,33 @@ class TTCERMoE(nn.Module):
         
         # Route tokens
         gates, indices, aux_loss = self.router(x_flat, return_aux_loss)
-        
-        # Dispatch to experts
-        # We'll use a simple loop for clarity; can optimize with scatter/gather
-        output = torch.zeros_like(x_flat)
-        
-        # For each expert, process its assigned tokens
-        for expert_idx in range(self.num_experts):
-            # Find tokens routed to this expert
-            expert_mask = (indices == expert_idx).any(dim=-1)  # [num_tokens]
-            expert_gates = gates[:, 0] * (indices[:, 0] == expert_idx).float()  # Simplified
-            
-            # Actually, gates has shape [num_tokens, top_k]
-            # We need to extract the gate value for this expert
-            for k in range(self.top_k):
-                k_mask = (indices[:, k] == expert_idx)
-                if k_mask.any():
-                    token_gates = gates[k_mask, k].unsqueeze(1)  # [n_tokens, 1]
-                    expert_input = x_flat[k_mask]  # [n_tokens, d_model]
-                    expert_output = self.experts[expert_idx](expert_input)
-                    output[k_mask] += token_gates * expert_output
-        
+
+        # === Vectorized dispatch: process all tokens through all experts at once ===
+        # all_outputs: (E, num_tokens, d_model)
+        all_outputs = torch.stack([expert(x_flat) for expert in self.experts])
+
+        # Build gate matrix: (num_tokens, E) — accumulated gate per expert per token
+        gate_matrix = torch.zeros(num_tokens, self.num_experts, device=x_flat.device)
+        for k in range(self.top_k):
+            gate_matrix.scatter_add_(1, indices[:, k:k+1], gates[:, k:k+1])
+
+        # Weighted sum: output[t,d] = sum_e gate[t,e] * all_outputs[e,t,d]
+        # gate_matrix: (T, E), all_outputs: (E, T, D) -> bmm -> (T, D)
+        output = torch.bmm(
+            gate_matrix.unsqueeze(1),      # (T, 1, E)
+            all_outputs.permute(1, 0, 2)   # (T, E, D)
+        ).squeeze(1)                        # (T, D)
+
         # Update statistics
         if self.training:
             with torch.no_grad():
                 self.tokens_processed += num_tokens
-                for k in range(self.top_k):
+                self.expert_counts.scatter_add_(
+                    0, indices[:, 0], torch.ones_like(indices[:, 0], dtype=torch.float)
+                )
+                if self.top_k > 1:
                     self.expert_counts.scatter_add_(
-                        0, indices[:, k], torch.ones_like(indices[:, k], dtype=torch.float)
+                        0, indices[:, 1], torch.ones_like(indices[:, 1], dtype=torch.float)
                     )
         
         # Reshape output
