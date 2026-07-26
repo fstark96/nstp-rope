@@ -6,12 +6,13 @@ NSTP RoPE Progressive Training — Full FineWeb 800M tokens
   2. ~45M param model (scaled from 14M)
   3. Full FineWeb 800M-token progressive training (128→512→1024)
   4. Sequence-length mixing to prevent catastrophic forgetting
+  5. Gradient Checkpointing — halves memory, enables 124M+ param training
 
 Stages:
-  S0: SEQ=128,  10K steps (warmup), lr=1e-3
-  S1: SEQ=256,  20K steps (grow ctx), lr=7e-4
-  S2: SEQ=512,  20K steps (double),  lr=5e-4
-  S3: SEQ=1024, 10K steps (max ctx),  lr=3e-4
+  S0: SEQ=128,  20K steps (warmup), lr=1e-3
+  S1: SEQ=256,  15K steps (grow ctx), lr=7e-4
+  S2: SEQ=512,  10K steps (double),  lr=5e-4
+  S3: SEQ=1024,  5K steps (max ctx),  lr=3e-4
 """
 import os
 os.environ['TORCH_DYNAMO_DISABLE'] = '1'
@@ -19,12 +20,14 @@ os.environ['TANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import sys
-class FakeProfile:
-    def run(self, *a, **k): pass
-    def runctx(self, *a, **k): pass
-sys.modules['profile'] = FakeProfile()
+import types
+_fm = types.ModuleType('profile')
+_fm.run = _fm; _fm.runctx = _fm; _fm.Profile = type('P',(),{'__init__':lambda s,*a,**k:None})
+_fm.__dict__['run'].__doc__ = ''
+_fm.__dict__['runctx'].__doc__ = ''
+sys.modules['profile'] = _fm
 
-import math, time, torch, torch.nn as nn, numpy as np
+import math, time, torch, torch.nn as nn, torch.utils.checkpoint, numpy as np
 
 # ── model dimensions ─────────────────────────────────────────────────────────
 VOCAB    = 50257
@@ -106,8 +109,10 @@ class RoPEModel(nn.Module):
             'ln2': nn.LayerNorm(D_MODEL),
         })
 
-    def forward(self, x):
-        """x: (B, S) token ids. Returns (B, S, V) logits."""
+    def forward(self, x, use_checkpoint=False):
+        """x: (B, S) token ids. Returns (B, S, V) logits.
+        use_checkpoint: NOT recommended on this hardware — 44.6M model fits in memory.
+        Gradient checkpointing is beneficial only at 100M+ params scales."""
         B, S = x.shape
         h = self.drop(self.emb(x))
         # Pre-compute causal mask once (upper triangle = True → mask these)
@@ -115,26 +120,34 @@ class RoPEModel(nn.Module):
             torch.ones(S, S, device=x.device, dtype=torch.bool), diagonal=1
         )
         for L in self.layers:
-            # Self-attention
-            q = L['q_proj'](L['ln1'](h))
-            k = L['k_proj'](L['ln1'](h))
-            v = L['v_proj'](L['ln1'](h))
-            q = q.view(B, S, NUM_HEADS, HEAD_DIM).transpose(1, 2)   # (B,h,S,hd)
-            k = k.view(B, S, NUM_HEADS, HEAD_DIM).transpose(1, 2)
-            v = v.view(B, S, NUM_HEADS, HEAD_DIM).transpose(1, 2)
-            q, k = self.rope(q, k)                                   # RoPE applied
-            # SDPA: is_causal=False + explicit boolean mask
-            # causal_mask: True = ignore, so upper triangle is masked
-            attn = torch.nn.functional.scaled_dot_product_attention(
-                q, k, v,
-                attn_mask=causal_mask,     # (S,S) broadcast to (B,h,S,S)
-                is_causal=False,           # ← CRITICAL: don't let SDPA re-apply causal
-                dropout_p=0.0,
-            )
-            h = h + L['o_proj'](attn.transpose(1, 2).reshape(B, S, -1))
-            # FFN
-            h = h + L['ffn'](L['ln2'](h))
+            h = _forward_layer_ckpt(h, L, self.rope, causal_mask,
+                                    B, S, NUM_HEADS, HEAD_DIM,
+                                    use_checkpoint and self.training)
         return self.head(self.ln_f(h))
+
+
+def _forward_layer_ckpt(h, L, rope, causal_mask, B, S, NUM_HEADS, HEAD_DIM, use_ckpt):
+    """Single transformer layer, optionally gradient-checkpointed.
+    use_ckpt=True → recomputes activations during backward to save ~30-50% memory."""
+    def layer_forward(h_):
+        q = L['q_proj'](L['ln1'](h_))
+        k = L['k_proj'](L['ln1'](h_))
+        v = L['v_proj'](L['ln1'](h_))
+        q = q.view(B, S, NUM_HEADS, HEAD_DIM).transpose(1, 2)
+        k = k.view(B, S, NUM_HEADS, HEAD_DIM).transpose(1, 2)
+        v = v.view(B, S, NUM_HEADS, HEAD_DIM).transpose(1, 2)
+        q, k = rope(q, k)
+        attn = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=causal_mask, is_causal=False, dropout_p=0.0,
+        )
+        h_ = h_ + L['o_proj'](attn.transpose(1, 2).reshape(B, S, -1))
+        h_ = h_ + L['ffn'](L['ln2'](h_))
+        return h_
+
+    if use_ckpt:
+        return torch.utils.checkpoint.checkpoint(layer_forward, h, use_reentrant=False)
+    else:
+        return layer_forward(h)
 
 
 # ── dataset ────────────────────────────────────────────────────────────────────
