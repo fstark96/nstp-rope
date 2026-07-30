@@ -343,7 +343,10 @@ class NSTPOmegaV3(nn.Module):
             # V3: apply resid_lambda + pass x0
             x_before = x
             out = block(x, x0, positions, self.hhm, return_draft=return_drafts or can_halt)
-            x = self.resid_lambdas[i] * x_before + (1 - self.resid_lambdas[i]) * out['x']
+            # resid_lambda modulates the residual contribution (Karpathy ResFormer-style)
+            # When resid_lambdas[i] = 1.0 (init), x_new = x + delta (additive residual)
+            # When resid_lambdas[i] < 1.0, scales down the new contribution
+            x = x_before + self.resid_lambdas[i] * (out['x'] - x_before)
             all_halt_probs.append(out['halt_prob'])
 
             if return_drafts and out['draft'] is not None:
