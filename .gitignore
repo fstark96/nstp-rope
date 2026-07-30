@@ -41,13 +41,11 @@ ENV/
 # Data
 data/
 *.bin
-*.json
 *.csv
-*.txt
 
 # Logs and checkpoints
 checkpoints/
-logs/
+logs/*.log
 *.log
 
 # Test cache
