@@ -29,6 +29,16 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+# Optional experiment config override (used by run_experiment.py / autoresearch_loop.py)
+_EXP_CONFIG = {}
+_exp_config_path = os.environ.get('EXPERIMENT_CONFIG')
+if _exp_config_path and os.path.exists(_exp_config_path):
+    try:
+        _EXP_CONFIG = json.loads(Path(_exp_config_path).read_text())
+        print(f"Loaded experiment config from {_exp_config_path}: {json.dumps(_EXP_CONFIG, indent=2)}")
+    except Exception as e:
+        print(f"Failed to load experiment config: {e}")
+
 # Force unbuffered output
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -96,23 +106,23 @@ logger.info(f"Train: {len(fw_train):,} tokens | Val: {len(fw_val):,} tokens")
 # ============================================================================
 # CONFIG
 # ============================================================================
-SEQ_LEN = 512
-BATCH_SIZE = 4
-ACCUM_STEPS = 16
-LR_MUON = 0.02          # Karpathy's default for matrix LR
-LR_ADAMW_EMBED = 0.6    # embeddings get higher LR
-LR_ADAMW_HEAD = 0.004   # lm_head gets lower LR
-LR_SCALAR = 0.5         # per-layer scalars
-WEIGHT_DECAY = 0.0
-GRAD_CLIP = 1.0
-EVAL_EVERY = 2500
-SAVE_EVERY = 5000
-MAX_STEPS = 50000
-LOG_EVERY = 100
-WARMUP_RATIO = 0.01     # 500 steps warmup
-WARMDOWN_RATIO = 0.5    # 50% warmdown
-FINAL_LR_FRAC = 0.0
-SOFTCAP = 15.0
+SEQ_LEN = _EXP_CONFIG.get('SEQ_LEN', 512)
+BATCH_SIZE = _EXP_CONFIG.get('BATCH_SIZE', 4)
+ACCUM_STEPS = _EXP_CONFIG.get('ACCUM_STEPS', 16)
+LR_MUON = _EXP_CONFIG.get('LR_MUON', 0.02)          # Karpathy's default for matrix LR
+LR_ADAMW_EMBED = _EXP_CONFIG.get('LR_ADAMW_EMBED', 0.6)    # embeddings get higher LR
+LR_ADAMW_HEAD = _EXP_CONFIG.get('LR_ADAMW_HEAD', 0.004)   # lm_head gets lower LR
+LR_SCALAR = _EXP_CONFIG.get('LR_SCALAR', 0.5)         # per-layer scalars
+WEIGHT_DECAY = _EXP_CONFIG.get('WEIGHT_DECAY', 0.0)
+GRAD_CLIP = _EXP_CONFIG.get('GRAD_CLIP', 1.0)
+EVAL_EVERY = _EXP_CONFIG.get('EVAL_EVERY', 2500)
+SAVE_EVERY = _EXP_CONFIG.get('SAVE_EVERY', 5000)
+MAX_STEPS = _EXP_CONFIG.get('MAX_STEPS', 50000)
+LOG_EVERY = _EXP_CONFIG.get('LOG_EVERY', 100)
+WARMUP_RATIO = _EXP_CONFIG.get('WARMUP_RATIO', 0.01)     # 500 steps warmup
+WARMDOWN_RATIO = _EXP_CONFIG.get('WARMDOWN_RATIO', 0.5)    # 50% warmdown
+FINAL_LR_FRAC = _EXP_CONFIG.get('FINAL_LR_FRAC', 0.0)
+SOFTCAP = _EXP_CONFIG.get('SOFTCAP', 15.0)
 NUM_WORKERS = 0
 
 SAVE_DIR = Path('C:/Users/user/AppData/Local/Temp/nstp-v2/models_v3')
@@ -265,7 +275,7 @@ def evaluate():
     val_ppl = compute_val_ppl(model, val_loader, DEVICE, vocab_size=50257, max_eval_batches=40)
     model.reset_memory()
     model.train()
-    logger.info(f"  [eval] val_bpb={val_bpb:.4f} | val_ppl={val_ppl:.2f}")
+    logger.info(f"  [eval] val_bpb: {val_bpb:.4f} | val_ppl: {val_ppl:.2f}")
     return val_bpb, val_ppl
 
 # ============================================================================
@@ -387,9 +397,10 @@ try:
         elif global_step % 5000 == 0:
             gc.collect()
 
-        # Fast fail
-        if math.isnan(accum_loss) or accum_loss > 100:
-            logger.error(f"FAIL at step {global_step}: loss={accum_loss}")
+        # Fast fail — use AVERAGED loss (accum_loss is sum over ACCUM_STEPS micro-steps)
+        avg_loss = accum_loss / ACCUM_STEPS
+        if math.isnan(avg_loss) or avg_loss > 100:
+            logger.error(f"FAIL at step {global_step}: avg_loss={avg_loss:.4f} (accum={accum_loss:.2f})")
             exit(1)
 
 except KeyboardInterrupt:
@@ -403,9 +414,13 @@ except Exception as e:
 logger.info("=" * 70)
 logger.info("V3 TRAINING COMPLETE")
 logger.info("=" * 70)
-logger.info(f"Best val_bpb: {best_bpb:.4f}")
-logger.info(f"Total time:   {(time.time()-start_time)/60:.1f}m")
-logger.info(f"Total steps:  {global_step}")
+logger.info(f"val_bpb:          {best_bpb:.4f}")
+logger.info(f"total_seconds:    {(time.time()-start_time):.1f}")
+logger.info(f"peak_vram_mb:     {torch.cuda.max_memory_allocated() / 1024 / 1024:.1f}")
+logger.info(f"num_params_M:     {total_params / 1e6:.1f}")
+logger.info(f"num_steps:        {global_step}")
+logger.info(f"Best val_bpb:     {best_bpb:.4f}")
+logger.info(f"Total time:       {(time.time()-start_time)/60:.1f}m")
 
 save_checkpoint(global_step, best_bpb)
 with open(SAVE_DIR / 'training_history.json', 'w') as f:
