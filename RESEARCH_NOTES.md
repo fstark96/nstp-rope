@@ -77,7 +77,7 @@ Compiled while V2 training runs (~20h to completion).
 - Part of the broader trend away from softmax attention
 - Worth studying for future versions
 
-## E. Implementation Suggestions for train_nstp_omega_v3.py
+## D. Implementation Suggestions for train_nstp_omega_v3.py
 
 1. **Switch to AdaMuon** — replace `Muon` in `muon_optimizer.py` with AdaMuon variant (one paper)
 2. **Add schedule-free option** — env var SCHEDULE_FREE=1 skips warmup/cosine entirely
@@ -86,6 +86,8 @@ Compiled while V2 training runs (~20h to completion).
 5. **Better eval early-exit** — enable TTCS halt gates during eval for inference speed
 6. **HHM v2** — fix memory issue blocking HHM, re-enable hierarchical hyperdimensional memory
 7. **Mamba-3 inspired** — replace `erase_gate = sigmoid(...)` with exp-trapezoidal update rule
+8. **Self-evolving layer growth** — every N steps, try adding 1 layer; keep if val improves
+9. **ReLoRA for FFN** — replace dense FFN with low-rank updates (B@A), 95% memory savings
 
 ## F. Next Experiment Ideas
 
@@ -95,6 +97,8 @@ Based on queue results (best: lr_muon=0.005), try:
 - V4: re-enabled layer dropout with cosine schedule
 - V4: self-healing dead-neuron detection + reinit
 - V4: HHM v2 (fixed memory)
+- V4: ReLoRA-style FFN — massive VRAM savings
+- V4: try growing network (start small, add layers if val improves)
 
 ## G. Pitfalls / Notes
 
@@ -102,3 +106,47 @@ Based on queue results (best: lr_muon=0.005), try:
 - V2 already crashed once from concurrent GPU access — never run V3 + V2 simultaneously
 - Muon LR sweet spot is ~0.005 for our 144M model (not 0.001, not 0.02)
 - Mixed-length zero-padding caused V2 regression → use BOS-packing (already in V3)
+
+## H. Top GitHub Repos (for cloning/study)
+
+1. **flash-linear-attention** (github.com/fla-org/flash-linear-attention)
+   - Official hardware-efficient GatedDeltaNet, RWKV, Mamba kernels
+   - Platform-agnostic (NVIDIA/AMD/Intel)
+   - PyPI package: `pip install flash-linear-attention`
+   - **Use their GatedDeltaNet layer as reference for V4**
+
+2. **Muon** (github.com/KellerJordan/Muon)
+   - Original Muon optimizer implementation by Keller Jordan
+   - Polar-express coefficients, Newton-Schulz iteration
+   - **Mirror our muon_optimizer.py against this for validation**
+
+3. **nanochat** (github.com/karpathy/nanochat)
+   - Already studied; full reference impl we used for V3 base
+   - Has Muon, value embeddings, val_bpb
+
+4. **autoresearch** (github.com/karpathy/autoresearch)
+   - Already studied; our autoresearch_loop.py mirrors this design
+
+5. **AutoResearchClaw** (github.com/aiming-lab/AutoResearchClaw)
+   - "Fully autonomous & self-evolving research from idea to paper"
+   - NaN/Inf fast-fail, self-healing repair, iterative refinement (up to 10 rounds)
+   - **Reference for self-healing autoresearch loop**
+
+6. **Awesome-Self-Evolving-Agents** (github.com/XMUDeepLIT)
+   - Curated list of self-evolving agent papers/code
+
+## I. Self-Evolving Specific (Network Growth)
+
+From "Growing Neural Networks" (arXiv 2501.18012, Jan 2025):
+- Method 1: Auxiliary weight that directly controls network size
+- Method 2: Controller-generated mask to modulate neuron participation
+- Both optimize size via gradient descent
+- **For NSTP-Ω: every K steps, spawn a candidate extra layer; keep it for K more steps if val improves**
+
+## J. Self-Healing Specific (Dead Neurons)
+
+From "DeadNeurons" (github.com/Rekhii) and standard practice:
+- Monitor: track fraction of neurons outputting exactly 0 across all batches
+- If dead_fraction > 0.5: reinitialize that neuron's weights (Kaiming init)
+- Cheap to compute (just one forward pass per K training steps)
+- **Could add to our `train_nstp_omega_v3.py` as `self_healing.py` helper**
