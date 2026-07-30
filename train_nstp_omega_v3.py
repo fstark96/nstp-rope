@@ -125,7 +125,7 @@ FINAL_LR_FRAC = _EXP_CONFIG.get('FINAL_LR_FRAC', 0.0)
 SOFTCAP = _EXP_CONFIG.get('SOFTCAP', 15.0)
 NUM_WORKERS = 0
 
-SAVE_DIR = Path('C:/Users/user/AppData/Local/Temp/nstp-v2/models_v3')
+SAVE_DIR = Path(_EXP_CONFIG.get('_SAVE_DIR', 'C:/Users/user/AppData/Local/Temp/nstp-v2/models_v3'))
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 CKPT_DIR = SAVE_DIR / 'checkpoints'
 CKPT_DIR.mkdir(parents=True, exist_ok=True)

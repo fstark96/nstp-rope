@@ -32,6 +32,7 @@ from datetime import datetime
 # CONFIG
 # ============================================================================
 REPO_DIR = Path('C:/Users/user/AppData/Local/Temp/nstp-v2')
+PYTHON_EXE = r'C:\Users\user\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe'
 TRAIN_SCRIPT = 'train_nstp_omega_v3.py'
 RUN_LOG = REPO_DIR / 'run.log'
 RESULTS_TSV = REPO_DIR / 'results.tsv'
@@ -108,13 +109,17 @@ def run_experiment(time_budget: int = EXPERIMENT_TIME_BUDGET) -> dict:
     if RUN_LOG.exists():
         RUN_LOG.unlink()
 
-    # Launch training as background process
-    cmd = (
-        f'cd {REPO_DIR} && '
-        f'PYTHONPATH= /c/Users/user/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe '
-        f'-u {TRAIN_SCRIPT} > {RUN_LOG} 2>&1'
+    # Launch training as background process (cross-platform: list args + cwd)
+    cmd = [
+        PYTHON_EXE,
+        '-u', TRAIN_SCRIPT
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=open(RUN_LOG, 'w'),
+        stderr=subprocess.STDOUT,
+        cwd=REPO_DIR
     )
-    proc = subprocess.Popen(cmd, shell=True)
     print(f"  PID: {proc.pid}")
 
     start = time.time()

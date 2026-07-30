@@ -21,6 +21,7 @@ from datetime import datetime
 
 
 REPO_DIR = Path('C:/Users/user/AppData/Local/Temp/nstp-v2')
+PYTHON_EXE = r'C:\Users\user\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe'
 RESULTS_TSV = REPO_DIR / 'results.tsv'
 RUN_LOG = REPO_DIR / 'run.log'
 TIME_BUDGET = 1800  # 30 min default
@@ -37,28 +38,33 @@ def run_experiment(config: dict, description: str, time_budget: int = TIME_BUDGE
     print(f"Config: {json.dumps(config, indent=2)}")
     print(f"{'='*70}")
 
-    # Save config to file for the training script to read
-    config_path = REPO_DIR / 'experiment_config.json'
-    with open(config_path, 'w') as f:
-        json.dump(config, f, indent=2)
-
-    # Build env with config path
-    env = os.environ.copy()
-    env['EXPERIMENT_CONFIG'] = str(config_path)
-
-    # Launch training
+    # Launch training (cross-platform: use env dict, no inline PYTHONPATH=)
     if RUN_LOG.exists():
         RUN_LOG.unlink()
 
-    cmd = (
-        f'cd {REPO_DIR} && '
-        f'PYTHONPATH= /c/Users/user/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe '
-        f'-u train_nstp_omega_v3.py'
-    )
-    print(f"$ {cmd}")
+    # Use unique save dir per experiment to avoid checkpoint resume
+    exp_save_dir = REPO_DIR / 'experiments' / description.replace(' ', '_').replace('/', '_')[:50]
+    exp_save_dir.mkdir(parents=True, exist_ok=True)
+    exp_config = {
+        **config,
+        '_SAVE_DIR': str(exp_save_dir)  # Tell training script where to save
+    }
+    with open(REPO_DIR / 'experiment_config.json', 'w') as f:
+        json.dump(exp_config, f, indent=2)
+
+    env = os.environ.copy()
+    env['PYTHONPATH'] = ''
+    env['EXPERIMENT_CONFIG'] = str(REPO_DIR / 'experiment_config.json')
+
+    cmd = [
+        PYTHON_EXE,
+        '-u', 'train_nstp_omega_v3.py'
+    ]
+    print(f"$ {' '.join(cmd)}")
 
     proc = subprocess.Popen(
-        cmd, shell=True, env=env,
+        cmd,
+        env=env,
         stdout=open(RUN_LOG, 'w'),
         stderr=subprocess.STDOUT,
         cwd=REPO_DIR

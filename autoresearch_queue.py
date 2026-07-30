@@ -22,6 +22,7 @@ from datetime import datetime
 
 
 REPO_DIR = Path('C:/Users/user/AppData/Local/Temp/nstp-v2')
+PYTHON_EXE = r'C:\Users\user\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe'
 CONFIGS_DIR = REPO_DIR / 'configs'
 RESULTS_TSV = REPO_DIR / 'results.tsv'
 RUN_LOG = REPO_DIR / 'run.log'
@@ -56,14 +57,15 @@ def run_one_experiment(config_path: Path, description: str, time_budget: int = 1
     print(f"Started: {datetime.now().isoformat()}")
     print(f"{'='*70}")
 
-    # Run via run_experiment.py
-    cmd = (
-        f'cd {REPO_DIR} && '
-        f'PYTHONPATH= /c/Users/user/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe '
-        f'-u run_experiment.py --config {config_path} --description "{description}" --budget {time_budget}'
-    )
-
-    proc = subprocess.Popen(cmd, shell=True)
+    # Run via run_experiment.py (cross-platform: use cwd arg, no shell cd)
+    cmd = [
+        PYTHON_EXE,
+        '-u', 'run_experiment.py',
+        '--config', str(config_path),
+        '--description', description,
+        '--budget', str(time_budget)
+    ]
+    proc = subprocess.Popen(cmd, cwd=REPO_DIR)
 
     # Wait for completion
     proc.wait()
