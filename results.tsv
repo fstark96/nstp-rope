@@ -1,2 +1,9 @@
 commit	val_bpb	memory_gb	status	description
 6f6ef28	12.372300	1.9	keep	TEST_baseline
+a3a8f10	12.378800	1.9	keep	01_baseline (auto-queue #1)
+a3a8f10	11.654400	1.9	keep	02_lr_muon_high (auto-queue #2)
+a3a8f10	12.266000	1.9	keep	03_warmup_long (auto-queue #3)
+a3a8f10	0.000000	0.0	crash	04_seq512 (auto-queue #4)
+a3a8f10	12.423500	1.8	keep	05_no_softcap (auto-queue #5)
+a3a8f10	12.067800	1.9	keep	06_higher_softcap (auto-queue #6)
+a3a8f10	12.147200	1.9	keep	07_weight_decay (auto-queue #7)
